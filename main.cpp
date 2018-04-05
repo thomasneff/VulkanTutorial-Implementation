@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
@@ -9,6 +10,13 @@
 
 const int WIDTH = 800;
 const int HEIGHT = 600;
+
+struct QueueFamilyIndices
+{
+	int graphicsFamily = -1;
+
+	bool isComplete() { return graphicsFamily >= 0; }
+};
 
 const std::vector<const char*> validationLayers = {"VK_LAYER_LUNARG_standard_validation"};
 
@@ -56,6 +64,7 @@ private:
 	GLFWwindow* window;
 	VkInstance instance;
 	VkDebugReportCallbackEXT callback;
+	VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
 
 	static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT objType, uint64_t obj, size_t location, int32_t code,
 	                                                    const char* layerPrefix, const char* msg, void* userData)
@@ -63,6 +72,38 @@ private:
 		std::cerr << "validation layer: " << msg << std::endl;
 
 		return VK_FALSE;
+	}
+
+	QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
+	{
+		QueueFamilyIndices indices;
+
+		// Get number of queue families for a given device
+		uint32_t queueFamilyCount = 0;
+		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+		// Allocate data for handles and query queue families
+		std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+		vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+
+		// Find a queue family that supports VK_QUEUE_GRAPHICS_BIT
+		int i = 0;
+		for(const auto& queueFamily : queueFamilies)
+		{
+			if(queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+			{
+				indices.graphicsFamily = i;
+			}
+
+			if(indices.isComplete())
+			{
+				break;
+			}
+
+			i++;
+		}
+
+		return indices;
 	}
 
 	void initWindow()
@@ -77,6 +118,91 @@ private:
 	{
 		createInstance();
 		setupDebugCallback();
+		pickPhysicalDevice();
+	}
+
+	int rateDeviceSuitability(VkPhysicalDevice device)
+	{
+		VkPhysicalDeviceProperties deviceProperties;
+		vkGetPhysicalDeviceProperties(device, &deviceProperties);
+
+		VkPhysicalDeviceFeatures deviceFeatures;
+		vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+		uint64_t score = 0;
+
+		// If the device doesn't suit our required queue families, it is not used
+		if(findQueueFamilies(device).isComplete() == false)
+		{
+			return -1;
+		}
+
+		// Discrete GPUs have a significant performance advantage
+		if(deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
+		{
+			score += 1000;
+		}
+
+		// Determine the available device local memory, and prefer devices with more memory.
+		auto memoryProps = VkPhysicalDeviceMemoryProperties{};
+		vkGetPhysicalDeviceMemoryProperties(device, &memoryProps);
+
+		auto heapsPointer = memoryProps.memoryHeaps;
+		auto heaps = std::vector<VkMemoryHeap>(heapsPointer, heapsPointer + memoryProps.memoryHeapCount);
+
+		for(const auto& heap : heaps)
+		{
+			if(heap.flags & VkMemoryHeapFlagBits::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+			{
+				score += heap.size / 1000000;
+			}
+		}
+
+		// Maximum possible size of textures affects graphics quality
+		score += deviceProperties.limits.maxImageDimension2D;
+
+		// Application can't function without geometry shaders
+		if(!deviceFeatures.geometryShader)
+		{
+			return 0;
+		}
+
+		return score;
+	}
+
+	void pickPhysicalDevice()
+	{
+		// Get number of physical devices
+		uint32_t deviceCount = 0;
+		vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+
+		if(deviceCount == 0)
+		{
+			throw std::runtime_error("failed to find GPUs with Vulkan support!");
+		}
+
+		// Allocate array and fill in device handles
+		std::vector<VkPhysicalDevice> devices(deviceCount);
+		vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+		// Use an ordered map to automatically sort candidates by increasing score
+		std::multimap<int, VkPhysicalDevice> candidates;
+
+		for(const auto& device : devices)
+		{
+			int score = rateDeviceSuitability(device);
+			candidates.insert(std::make_pair(score, device));
+		}
+
+		// Check if the best candidate is suitable at all
+		if(candidates.rbegin()->first > 0)
+		{
+			physicalDevice = candidates.rbegin()->second;
+		}
+		else
+		{
+			throw std::runtime_error("failed to find a suitable GPU!");
+		}
 	}
 
 	void setupDebugCallback()

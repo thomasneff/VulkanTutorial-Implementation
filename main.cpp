@@ -1,4 +1,5 @@
 #define GLFW_INCLUDE_VULKAN
+#include <algorithm>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -6,7 +7,6 @@
 #include <set>
 #include <stdexcept>
 #include <vector>
-#include <algorithm>
 
 #include <GLFW/glfw3.h>
 
@@ -105,7 +105,8 @@ private:
 		uint32_t formatCount;
 		vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
 
-		if (formatCount != 0) {
+		if(formatCount != 0)
+		{
 			details.formats.resize(formatCount);
 			vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
 		}
@@ -114,7 +115,8 @@ private:
 		uint32_t presentModeCount;
 		vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
 
-		if (presentModeCount != 0) {
+		if(presentModeCount != 0)
+		{
 			details.presentModes.resize(presentModeCount);
 			vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
 		}
@@ -233,7 +235,8 @@ private:
 
 		createInfo.oldSwapchain = VK_NULL_HANDLE;
 
-		if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
+		if(vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS)
+		{
 			throw std::runtime_error("failed to create swap chain!");
 		}
 
@@ -242,7 +245,6 @@ private:
 		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
 		swapChainImageFormat = surfaceFormat.format;
 		swapChainExtent = extent;
-
 	}
 
 	void createSurface()
@@ -340,14 +342,18 @@ private:
 		return availableFormats[0];
 	}
 
-	VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR> availablePresentModes) {
+	VkPresentModeKHR chooseSwapPresentMode(const std::vector<VkPresentModeKHR> availablePresentModes)
+	{
 		VkPresentModeKHR bestMode = VK_PRESENT_MODE_FIFO_KHR;
 
-		for (const auto& availablePresentMode : availablePresentModes) {
-			if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
+		for(const auto& availablePresentMode : availablePresentModes)
+		{
+			if(availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
+			{
 				return availablePresentMode;
 			}
-			else if (availablePresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
+			else if(availablePresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR)
+			{
 				bestMode = availablePresentMode;
 			}
 		}
@@ -355,12 +361,15 @@ private:
 		return bestMode;
 	}
 
-	VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
-		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
+	VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
+	{
+		if(capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
+		{
 			return capabilities.currentExtent;
 		}
-		else {
-			VkExtent2D actualExtent = { WIDTH, HEIGHT };
+		else
+		{
+			VkExtent2D actualExtent = {WIDTH, HEIGHT};
 
 			actualExtent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, actualExtent.width));
 			actualExtent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, actualExtent.height));
@@ -392,16 +401,14 @@ private:
 
 		// We need to have adequate swap chain support
 		bool swapChainAdequate = false;
-		
+
 		SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
 		swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
 
-		if (!swapChainAdequate)
+		if(!swapChainAdequate)
 		{
 			return -1;
 		}
-		
-
 
 		// Discrete GPUs have a significant performance advantage
 		if(deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)

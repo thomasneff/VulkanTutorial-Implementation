@@ -49,10 +49,12 @@ struct Vertex
 	}
 };
 
-std::vector<Vertex> vertices = {
-    {{0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}},  {{1.0f, 0.5f}, {0.0f, 1.0f, 0.0f}}, {{0.0f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}}, {{0.0f, 0.5f}, {0.0f, 1.0f, 0.0f}}, {{-1.0f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-};
+const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 struct QueueFamilyIndices
 {
@@ -137,6 +139,8 @@ private:
 	VkSemaphore renderFinishedSemaphore;
 	VkBuffer vertexBuffer;
 	VkDeviceMemory vertexBufferMemory;
+	VkBuffer indexBuffer;
+	VkDeviceMemory indexBufferMemory;
 
 	static std::vector<char> readFile(const std::string& filename)
 	{
@@ -375,6 +379,7 @@ private:
 		createFramebuffers();
 		createCommandPool();
 		createVertexBuffer();
+		createIndexBuffer();
 		createCommandBuffers();
 		createSemaphores();
 	}
@@ -461,6 +466,24 @@ private:
 		vkBindBufferMemory(device, buffer, bufferMemory, 0);
 	}
 
+	void createIndexBuffer()
+	{
+		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+		VkBuffer stagingBuffer;
+		VkDeviceMemory stagingBufferMemory;
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+		copyDataToCPUVisibleBuffer(indices, stagingBuffer, stagingBufferMemory);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+
+		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+
+		vkDestroyBuffer(device, stagingBuffer, nullptr);
+		vkFreeMemory(device, stagingBufferMemory, nullptr);
+	}
+
 	void createVertexBuffer()
 	{
 		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -469,7 +492,7 @@ private:
 		VkDeviceMemory stagingBufferMemory;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
-		copyVertexDataToCPUVisibleBuffer(stagingBuffer, stagingBufferMemory);
+		copyDataToCPUVisibleBuffer(vertices, stagingBuffer, stagingBufferMemory);
 
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
 
@@ -479,18 +502,19 @@ private:
 		vkFreeMemory(device, stagingBufferMemory, nullptr);
 	}
 
-	void copyVertexDataToCPUVisibleBuffer(VkBuffer buffer, VkDeviceMemory memory)
+	template <typename T>
+	void copyDataToCPUVisibleBuffer(const std::vector<T>& src_data, VkBuffer buffer, VkDeviceMemory memory)
 	{
 		vkDeviceWaitIdle(device);
 
-		size_t buffer_size = sizeof(vertices[0]) * vertices.size();
+		size_t buffer_size = sizeof(src_data[0]) * src_data.size();
 
 		// Map buffer memory to CPU accessible memory
 		void* data;
 		vkMapMemory(device, memory, 0, buffer_size, 0, &data);
 
 		// Copy vertex data
-		memcpy(data, vertices.data(), buffer_size);
+		memcpy(data, src_data.data(), buffer_size);
 
 		// Unmap buffer memory
 		vkUnmapMemory(device, memory);
@@ -552,7 +576,9 @@ private:
 			VkDeviceSize offsets[] = {0};
 			vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
 
-			vkCmdDraw(commandBuffers[i], static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+			vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
+			vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
 			vkCmdEndRenderPass(commandBuffers[i]);
 
@@ -1250,7 +1276,7 @@ private:
 		// vertices[0].color += glm::vec3{0.0001f, 0.0002f, 0.0004f};
 		// vertices[0].color = glm::mod(vertices[0].color, glm::vec3{1.0f, 1.0f, 1.0f});
 
-		// copyVertexDataToCPUVisibleBuffer();
+		// copyDataToCPUVisibleBuffer();
 	}
 
 	void mainLoop()
@@ -1268,6 +1294,9 @@ private:
 	void cleanup()
 	{
 		cleanupSwapChain();
+
+		vkDestroyBuffer(device, indexBuffer, nullptr);
+		vkFreeMemory(device, indexBufferMemory, nullptr);
 
 		vkDestroyBuffer(device, vertexBuffer, nullptr);
 		vkFreeMemory(device, vertexBufferMemory, nullptr);

@@ -1,10 +1,13 @@
 #define GLFW_INCLUDE_VULKAN
+#define GLM_FORCE_RADIANS
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
 #include <map>
 #include <set>
@@ -49,12 +52,12 @@ struct Vertex
 	}
 };
 
-const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
-
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
+struct UniformBufferObject
+{
+	glm::mat4 model;
+	glm::mat4 view;
+	glm::mat4 proj;
+};
 
 struct QueueFamilyIndices
 {
@@ -70,6 +73,13 @@ struct SwapChainSupportDetails
 	std::vector<VkSurfaceFormatKHR> formats;
 	std::vector<VkPresentModeKHR> presentModes;
 };
+
+const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                      {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                                      {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+                                      {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};
+
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 const std::vector<const char*> validationLayers = {"VK_LAYER_LUNARG_standard_validation"};
 
@@ -130,6 +140,7 @@ private:
 	VkExtent2D swapChainExtent;
 	std::vector<VkImageView> swapChainImageViews;
 	VkRenderPass renderPass;
+	VkDescriptorSetLayout descriptorSetLayout;
 	VkPipelineLayout pipelineLayout;
 	VkPipeline graphicsPipeline;
 	std::vector<VkFramebuffer> swapChainFramebuffers;
@@ -141,6 +152,8 @@ private:
 	VkDeviceMemory vertexBufferMemory;
 	VkBuffer indexBuffer;
 	VkDeviceMemory indexBufferMemory;
+	VkBuffer uniformBuffer;
+	VkDeviceMemory uniformBufferMemory;
 
 	static std::vector<char> readFile(const std::string& filename)
 	{
@@ -375,13 +388,35 @@ private:
 		createSwapChain();
 		createImageViews();
 		createRenderPass();
+		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createFramebuffers();
 		createCommandPool();
 		createVertexBuffer();
 		createIndexBuffer();
+		createUniformBuffer();
 		createCommandBuffers();
 		createSemaphores();
+	}
+
+	void createDescriptorSetLayout()
+	{
+		VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+		uboLayoutBinding.binding = 0;
+		uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		uboLayoutBinding.descriptorCount = 1;
+		uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		uboLayoutBinding.pImmutableSamplers = nullptr; // Optional
+
+		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &uboLayoutBinding;
+
+		if(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create descriptor set layout!");
+		}
 	}
 
 	uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties)
@@ -474,7 +509,7 @@ private:
 		VkDeviceMemory stagingBufferMemory;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
-		copyDataToCPUVisibleBuffer(indices, stagingBuffer, stagingBufferMemory);
+		copyDataToCPUVisibleBufferVector(indices, stagingBuffer, stagingBufferMemory);
 
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
 
@@ -482,6 +517,14 @@ private:
 
 		vkDestroyBuffer(device, stagingBuffer, nullptr);
 		vkFreeMemory(device, stagingBufferMemory, nullptr);
+	}
+
+	void createUniformBuffer()
+	{
+		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+		createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, uniformBuffer,
+		             uniformBufferMemory);
 	}
 
 	void createVertexBuffer()
@@ -492,7 +535,7 @@ private:
 		VkDeviceMemory stagingBufferMemory;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
-		copyDataToCPUVisibleBuffer(vertices, stagingBuffer, stagingBufferMemory);
+		copyDataToCPUVisibleBufferVector(vertices, stagingBuffer, stagingBufferMemory);
 
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
 
@@ -503,9 +546,10 @@ private:
 	}
 
 	template <typename T>
-	void copyDataToCPUVisibleBuffer(const std::vector<T>& src_data, VkBuffer buffer, VkDeviceMemory memory)
+	void copyDataToCPUVisibleBufferVector(const std::vector<T>& src_data, VkBuffer buffer, VkDeviceMemory memory)
 	{
-		vkDeviceWaitIdle(device);
+		// TODO: do we need this?
+		// vkDeviceWaitIdle(device);
 
 		size_t buffer_size = sizeof(src_data[0]) * src_data.size();
 
@@ -515,6 +559,24 @@ private:
 
 		// Copy vertex data
 		memcpy(data, src_data.data(), buffer_size);
+
+		// Unmap buffer memory
+		vkUnmapMemory(device, memory);
+	}
+
+	template <typename T>
+	void copyDataToCPUVisibleBuffer(const T& src_data, VkBuffer buffer, VkDeviceMemory memory)
+	{
+		vkDeviceWaitIdle(device);
+
+		size_t buffer_size = sizeof(src_data);
+
+		// Map buffer memory to CPU accessible memory
+		void* data;
+		vkMapMemory(device, memory, 0, buffer_size, 0, &data);
+
+		// Copy vertex data
+		memcpy(data, &src_data, buffer_size);
 
 		// Unmap buffer memory
 		vkUnmapMemory(device, memory);
@@ -803,8 +865,8 @@ private:
 
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipelineLayoutInfo.setLayoutCount = 0;            // Optional
-		pipelineLayoutInfo.pSetLayouts = nullptr;         // Optional
+		pipelineLayoutInfo.setLayoutCount = 1;
+		pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 		pipelineLayoutInfo.pushConstantRangeCount = 0;    // Optional
 		pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -1275,8 +1337,19 @@ private:
 	{
 		// vertices[0].color += glm::vec3{0.0001f, 0.0002f, 0.0004f};
 		// vertices[0].color = glm::mod(vertices[0].color, glm::vec3{1.0f, 1.0f, 1.0f});
+		static auto startTime = std::chrono::high_resolution_clock::now();
 
-		// copyDataToCPUVisibleBuffer();
+		auto currentTime = std::chrono::high_resolution_clock::now();
+		float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+		UniformBufferObject ubo = {};
+		ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubo.proj = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float) swapChainExtent.height, 0.1f, 10.0f);
+
+		// GLM was designed for OpenGL, so we need to invert the Y coordinate of the clip coordinates
+		ubo.proj[1][1] *= -1;
+
+		copyDataToCPUVisibleBuffer(ubo, uniformBuffer, uniformBufferMemory);
 	}
 
 	void mainLoop()
@@ -1294,6 +1367,10 @@ private:
 	void cleanup()
 	{
 		cleanupSwapChain();
+
+		vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+		vkDestroyBuffer(device, uniformBuffer, nullptr);
+		vkFreeMemory(device, uniformBufferMemory, nullptr);
 
 		vkDestroyBuffer(device, indexBuffer, nullptr);
 		vkFreeMemory(device, indexBufferMemory, nullptr);

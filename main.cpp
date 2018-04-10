@@ -13,12 +13,19 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 #include <GLFW/glfw3.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include "tiny_obj_loader.h"
+
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 
 /*
 TODO:
@@ -35,11 +42,16 @@ It's best to do this after the texture mapping works to check if the texture res
 const int WIDTH = 800;
 const int HEIGHT = 600;
 
+const std::string MODEL_PATH = "models/chalet.obj";
+const std::string TEXTURE_PATH = "textures/chalet.jpg";
+
 struct Vertex
 {
 	glm::vec3 pos;
 	glm::vec3 color;
 	glm::vec2 texCoord;
+
+	bool operator==(const Vertex& other) const { return pos == other.pos && color == other.color && texCoord == other.texCoord; }
 
 	static VkVertexInputBindingDescription getBindingDescription()
 	{
@@ -74,6 +86,18 @@ struct Vertex
 	}
 };
 
+namespace std
+{
+	template <>
+	struct hash<Vertex>
+	{
+		size_t operator()(Vertex const& vertex) const
+		{
+			return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+		}
+	};
+} // namespace std
+
 struct UniformBufferObject
 {
 	glm::mat4 model;
@@ -95,14 +119,6 @@ struct SwapChainSupportDetails
 	std::vector<VkSurfaceFormatKHR> formats;
 	std::vector<VkPresentModeKHR> presentModes;
 };
-
-const std::vector<Vertex> vertices = {{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},  {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-                                      {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-                                      {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}}, {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-                                      {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},   {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}};
-
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4};
 
 const std::vector<const char*> validationLayers = {"VK_LAYER_LUNARG_standard_validation"};
 
@@ -171,6 +187,8 @@ private:
 	std::vector<VkCommandBuffer> commandBuffers;
 	VkSemaphore imageAvailableSemaphore;
 	VkSemaphore renderFinishedSemaphore;
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
 	VkBuffer vertexBuffer;
 	VkDeviceMemory vertexBufferMemory;
 	VkBuffer indexBuffer;
@@ -429,7 +447,7 @@ private:
 		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
-
+		loadModel();
 		// Start recording a command buffer that records all staging and copy operations for vertex/index/texture data
 		beginSetupCommandBuffer();
 
@@ -464,6 +482,42 @@ private:
 		createDescriptorSet();
 		createCommandBuffers();
 		createSemaphores();
+	}
+
+	void loadModel()
+	{
+		tinyobj::attrib_t attrib;
+		std::vector<tinyobj::shape_t> shapes;
+		std::vector<tinyobj::material_t> materials;
+		std::string err;
+
+		if(!tinyobj::LoadObj(&attrib, &shapes, &materials, &err, MODEL_PATH.c_str()))
+		{
+			throw std::runtime_error(err);
+		}
+
+		std::unordered_map<Vertex, uint32_t> uniqueVertices = {};
+
+		for(const auto& shape : shapes)
+		{
+			for(const auto& index : shape.mesh.indices)
+			{
+				Vertex vertex = {};
+
+				vertex.pos = {attrib.vertices[3 * index.vertex_index + 0], attrib.vertices[3 * index.vertex_index + 1], attrib.vertices[3 * index.vertex_index + 2]};
+
+				vertex.texCoord = {attrib.texcoords[2 * index.texcoord_index + 0], 1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
+				vertex.color = {1.0f, 1.0f, 1.0f};
+
+				if(uniqueVertices.count(vertex) == 0)
+				{
+					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+					vertices.push_back(vertex);
+				}
+
+				indices.push_back(uniqueVertices[vertex]);
+			}
+		}
 	}
 
 	VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features)
@@ -719,7 +773,7 @@ private:
 	void createTextureImage(VkBuffer& stagingBuffer, VkDeviceMemory& stagingBufferMemory)
 	{
 		int texWidth, texHeight, texChannels;
-		stbi_uc* pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+		stbi_uc* pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 		size_t imageSize = texWidth * texHeight * 4;
 
 		if(!pixels)
@@ -1095,7 +1149,7 @@ private:
 			VkDeviceSize offsets[] = {0};
 			vkCmdBindVertexBuffers(commandBuffers[i], 0, 1, vertexBuffers, offsets);
 
-			vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+			vkCmdBindIndexBuffer(commandBuffers[i], indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
 			vkCmdDrawIndexed(commandBuffers[i], static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 

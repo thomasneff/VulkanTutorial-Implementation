@@ -181,6 +181,7 @@ private:
 	VkDeviceMemory textureImageMemory;
 	VkImageView textureImageView;
 	VkSampler textureSampler;
+	VkCommandBuffer setupCommandBuffer;
 
 	static std::vector<char> readFile(const std::string& filename)
 	{
@@ -419,16 +420,68 @@ private:
 		createGraphicsPipeline();
 		createFramebuffers();
 		createCommandPool();
-		createTextureImage();
+
+		// Start recording a command buffer that records all staging and copy operations for vertex/index/texture data
+		beginSetupCommandBuffer();
+
+		// Setup stagingBuffer and stagingBufferMemory for every call, as we need to clean that up after the setup buffer was submitted.
+		VkBuffer stBufTex, stBufVert, stBufIdx;
+		VkDeviceMemory stBufMemTex, stBufMemVert, stBufMemIdx;
+
+		createTextureImage(stBufTex, stBufMemTex);
+		createVertexBuffer(stBufVert, stBufMemVert);
+		createIndexBuffer(stBufIdx, stBufMemIdx);
+
+		// Submit all commands that were setup
+		submitSetupCommandBuffer();
+
+		// Cleanup staging buffers
+		vkDestroyBuffer(device, stBufTex, nullptr);
+		vkDestroyBuffer(device, stBufVert, nullptr);
+		vkDestroyBuffer(device, stBufIdx, nullptr);
+		vkFreeMemory(device, stBufMemTex, nullptr);
+		vkFreeMemory(device, stBufMemVert, nullptr);
+		vkFreeMemory(device, stBufMemIdx, nullptr);
+
 		createTextureImageView();
 		createTextureSampler();
-		createVertexBuffer();
-		createIndexBuffer();
 		createUniformBuffer();
 		createDescriptorPool();
 		createDescriptorSet();
 		createCommandBuffers();
 		createSemaphores();
+	}
+
+	void beginSetupCommandBuffer()
+	{
+		VkCommandBufferAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		allocInfo.commandPool = commandPool;
+		allocInfo.commandBufferCount = 1;
+
+		vkAllocateCommandBuffers(device, &allocInfo, &setupCommandBuffer);
+
+		VkCommandBufferBeginInfo beginInfo = {};
+		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		vkBeginCommandBuffer(setupCommandBuffer, &beginInfo);
+	}
+
+	void submitSetupCommandBuffer()
+	{
+		vkEndCommandBuffer(setupCommandBuffer);
+
+		VkSubmitInfo submitInfo = {};
+		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submitInfo.commandBufferCount = 1;
+		submitInfo.pCommandBuffers = &setupCommandBuffer;
+
+		vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		vkQueueWaitIdle(graphicsQueue);
+
+		vkFreeCommandBuffers(device, commandPool, 1, &setupCommandBuffer);
 	}
 
 	void createTextureSampler()
@@ -483,7 +536,7 @@ private:
 
 	void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
 	{
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		VkCommandBuffer commandBuffer = setupCommandBuffer; // beginSingleTimeCommands();
 
 		VkBufferImageCopy region = {};
 		region.bufferOffset = 0;
@@ -500,12 +553,12 @@ private:
 
 		vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-		endSingleTimeCommands(commandBuffer);
+		// endSingleTimeCommands(commandBuffer);
 	}
 
 	void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout)
 	{
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		VkCommandBuffer commandBuffer = setupCommandBuffer; // beginSingleTimeCommands();
 
 		VkImageMemoryBarrier barrier = {};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -548,7 +601,7 @@ private:
 
 		vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-		endSingleTimeCommands(commandBuffer);
+		// endSingleTimeCommands(commandBuffer);
 	}
 
 	void createImage(uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image,
@@ -590,7 +643,7 @@ private:
 		vkBindImageMemory(device, image, imageMemory, 0);
 	}
 
-	void createTextureImage()
+	void createTextureImage(VkBuffer& stagingBuffer, VkDeviceMemory& stagingBufferMemory)
 	{
 		int texWidth, texHeight, texChannels;
 		stbi_uc* pixels = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
@@ -601,8 +654,8 @@ private:
 			throw std::runtime_error("failed to load texture image!");
 		}
 
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
+		// VkBuffer stagingBuffer;
+		// VkDeviceMemory stagingBufferMemory;
 
 		createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
@@ -618,8 +671,8 @@ private:
 
 		transitionImageLayout(textureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-		vkDestroyBuffer(device, stagingBuffer, nullptr);
-		vkFreeMemory(device, stagingBufferMemory, nullptr);
+		// vkDestroyBuffer(device, stagingBuffer, nullptr);
+		// vkFreeMemory(device, stagingBufferMemory, nullptr);
 	}
 
 	VkCommandBuffer beginSingleTimeCommands()
@@ -769,13 +822,13 @@ private:
 
 	void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
 	{
-		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		VkCommandBuffer commandBuffer = setupCommandBuffer; // beginSingleTimeCommands();
 
 		VkBufferCopy copyRegion = {};
 		copyRegion.size = size;
 		vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
-		endSingleTimeCommands(commandBuffer);
+		// endSingleTimeCommands(commandBuffer);
 	}
 
 	void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
@@ -807,12 +860,12 @@ private:
 		vkBindBufferMemory(device, buffer, bufferMemory, 0);
 	}
 
-	void createIndexBuffer()
+	void createIndexBuffer(VkBuffer& stagingBuffer, VkDeviceMemory& stagingBufferMemory)
 	{
 		VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
+		// VkBuffer stagingBuffer;
+		// VkDeviceMemory stagingBufferMemory;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
 		copyDataToCPUVisibleBuffer(indices, stagingBuffer, stagingBufferMemory);
@@ -821,8 +874,8 @@ private:
 
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 
-		vkDestroyBuffer(device, stagingBuffer, nullptr);
-		vkFreeMemory(device, stagingBufferMemory, nullptr);
+		// vkDestroyBuffer(device, stagingBuffer, nullptr);
+		// vkFreeMemory(device, stagingBufferMemory, nullptr);
 	}
 
 	void createUniformBuffer()
@@ -833,12 +886,12 @@ private:
 		             uniformBufferMemory);
 	}
 
-	void createVertexBuffer()
+	void createVertexBuffer(VkBuffer& stagingBuffer, VkDeviceMemory& stagingBufferMemory)
 	{
 		VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-		VkBuffer stagingBuffer;
-		VkDeviceMemory stagingBufferMemory;
+		// VkBuffer stagingBuffer;
+		// VkDeviceMemory stagingBufferMemory;
 		createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
 
 		copyDataToCPUVisibleBuffer(vertices, stagingBuffer, stagingBufferMemory);
@@ -847,8 +900,8 @@ private:
 
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 
-		vkDestroyBuffer(device, stagingBuffer, nullptr);
-		vkFreeMemory(device, stagingBufferMemory, nullptr);
+		// vkDestroyBuffer(device, stagingBuffer, nullptr);
+		// vkFreeMemory(device, stagingBufferMemory, nullptr);
 	}
 
 	template <typename T>
